@@ -191,6 +191,9 @@ Zone.__load_patch('ZoneAwarePromise', (global: any, Zone: ZoneType, api: _ZonePr
             api.scheduleMicroTask();  // to make sure that it is running
           }
         }
+        if ((promise as any)['__zone_symbol__isAsync'] === true && (promise as any)['__zone_symbol__outsideAsync'] === true) {
+          Zone.setAsyncFrame();
+        }
       }
     }
     // Resolving an already resolved promise is a noop.
@@ -472,8 +475,11 @@ Zone.__load_patch('ZoneAwarePromise', (global: any, Zone: ZoneType, api: _ZonePr
     proto[symbolThen] = originalThen;
 
     Ctor.prototype.then = function(onResolve: any, onReject: any) {
-      const wrapped =
-          new ZoneAwarePromise((resolve, reject) => { originalThen.call(this, resolve, reject); });
+      const isNativePromise = this && !(this instanceof ZoneAwarePromise);
+      const wrapped = new ZoneAwarePromise((resolve, reject) => { originalThen.call(this, resolve, reject); });
+      if (isNativePromise) {
+        (wrapped as any)['__zone_symbol__isAsync'] = true;
+      }
       return wrapped.then(onResolve, onReject);
     };
     (Ctor as any)[symbolThenPatched] = true;

@@ -319,6 +319,9 @@ interface ZoneType {
    * Zone symbol API to generate a string with __zone_symbol__ prefix
    */
   __symbol__(name: string): string;
+
+  /** @internal */
+  setAsyncFrame(): void;
 }
 
 /**
@@ -715,6 +718,11 @@ const Zone: ZoneType = (function(global: any) {
     }
   }
 
+  const detectAsyncFunction = async function() {};
+  const AsyncFunction = (detectAsyncFunction.constructor as any).name === 'AsyncFunction' ?
+    detectAsyncFunction.constructor :
+    null;
+
   class Zone implements AmbientZone {
     // tslint:disable-next-line:require-internal-with-underscore
     static __symbol__: (name: string) => string = __symbol__;
@@ -741,6 +749,10 @@ const Zone: ZoneType = (function(global: any) {
     static get current(): AmbientZone { return _currentZoneFrame.zone; }
 
     static get currentTask(): Task|null { return _currentTask; }
+
+    static setAsyncFrame() {
+      _currentZoneFrame = _asyncZoneFrame!;
+    }
 
     // tslint:disable-next-line:require-internal-with-underscore
     static __load_patch(name: string, fn: _PatchFn): void {
@@ -811,9 +823,27 @@ const Zone: ZoneType = (function(global: any) {
         callback: (...args: any[]) => T, applyThis?: any, applyArgs?: any[], source?: string): T {
       _currentZoneFrame = {parent: _currentZoneFrame, zone: this};
       try {
+        if (callback && callback.constructor === AsyncFunction) {
+          const r = this._zoneDelegate.invoke(this, callback, applyThis, applyArgs, source);
+          if (r && typeof r.then === 'function') {
+            r['__zone_symbol__outsideAsync'] = true;
+            _asyncZoneFrame = _currentZoneFrame;
+            return r.then((result: any) => {
+              _currentZoneFrame = _asyncZoneFrame!.parent!;
+              _isAsyncSet = true;
+              _asyncZoneFrame = null;
+              return result;
+            });
+          }
+          return r;
+        }
         return this._zoneDelegate.invoke(this, callback, applyThis, applyArgs, source);
       } finally {
-        _currentZoneFrame = _currentZoneFrame.parent !;
+        if (!_isAsyncSet) {
+          _currentZoneFrame = _currentZoneFrame.parent!;
+        } else {
+          _isAsyncSet = false;
+        }
       }
     }
 
@@ -1424,6 +1454,8 @@ const Zone: ZoneType = (function(global: any) {
     patchCallbacks: () => noop
   };
   let _currentZoneFrame: _ZoneFrame = {parent: null, zone: new Zone(null, null)};
+  let _asyncZoneFrame: _ZoneFrame|null = null;
+  let _isAsyncSet = false;
   let _currentTask: Task|null = null;
   let _numberOfNestedTaskFrames = 0;
 
